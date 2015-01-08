@@ -167,6 +167,8 @@ static void wacom_power_off(struct wacom_i2c *wac_i2c)
 static irqreturn_t wacom_interrupt(int irq, void *dev_id)
 {
 	struct wacom_i2c *wac_i2c = dev_id;
+	if (wac_i2c->init_fail)
+		return IRQ_HANDLED;
 	wacom_i2c_coord(wac_i2c);
 	return IRQ_HANDLED;
 }
@@ -175,6 +177,9 @@ static irqreturn_t wacom_interrupt(int irq, void *dev_id)
 static irqreturn_t wacom_interrupt_pdct(int irq, void *dev_id)
 {
 	struct wacom_i2c *wac_i2c = dev_id;
+
+	if (wac_i2c->init_fail)
+		return IRQ_HANDLED;
 
 	if (wac_i2c->query_status == false)
 		return IRQ_HANDLED;
@@ -205,6 +210,8 @@ static void pen_insert_work(struct work_struct *work)
 	struct wacom_i2c *wac_i2c =
 		container_of(work, struct wacom_i2c, pen_insert_dwork.work);
 
+	if (wac_i2c->init_fail)
+		return;
 	wac_i2c->pen_insert = !gpio_get_value(wac_i2c->gpio_pen_insert);
 
 	printk(KERN_DEBUG "epen:%s : %d\n",
@@ -234,8 +241,12 @@ static irqreturn_t wacom_pen_detect(int irq, void *dev_id)
 static int init_pen_insert(struct wacom_i2c *wac_i2c)
 {
 	int ret = 0;
-	int irq = gpio_to_irq(wac_i2c->gpio_pen_insert);
+	int irq = 0;
 
+	if (wac_i2c->init_fail)
+    		return 0;
+
+	irq = gpio_to_irq(wac_i2c->gpio_pen_insert);
 	INIT_DELAYED_WORK(&wac_i2c->pen_insert_dwork, pen_insert_work);
 
 	ret =
@@ -380,6 +391,10 @@ static void wacom_i2c_resume_work(struct work_struct *work)
 			container_of(work, struct wacom_i2c, resume_work.work);
 	u8 irq_state = 0;
 	int ret = 0;
+
+	/* some workaround */
+	if (wac_i2c->init_fail)
+		return;
 
 	irq_state = wac_i2c->wac_pdata->get_irq_state();
 	wacom_enable_irq(wac_i2c, true);
@@ -765,6 +780,9 @@ static void wacom_i2c_update_work(struct work_struct *work)
 	int ret;
 	int retry = 3;
 
+	if (wac_i2c->init_fail)
+		return;
+
 	mutex_lock(&wac_i2c->update_lock);
 	wacom_enable_irq(wac_i2c, false);
 
@@ -821,6 +839,9 @@ static ssize_t epen_reset_store(struct device *dev,
 {
 	struct wacom_i2c *wac_i2c = dev_get_drvdata(dev);
 	int val;
+
+	if (wac_i2c->init_fail)
+		return count;
 
 	sscanf(buf, "%d", &val);
 
@@ -912,6 +933,9 @@ static ssize_t epen_checksum_store(struct device *dev,
 	struct wacom_i2c *wac_i2c = dev_get_drvdata(dev);
 	int val;
 
+	if (wac_i2c->init_fail)
+		return count;
+
 	sscanf(buf, "%d", &val);
 
 	if (val != 1) {
@@ -950,6 +974,9 @@ static void wacom_open_test(struct wacom_i2c *wac_i2c)
 	u8 cmd = 0;
 	u8 buf[2] = {0,};
 	int ret = 0, retry = 10;
+
+	if (wac_i2c->init_fail)
+		return;
 
 	cmd = WACOM_I2C_STOP;
 	ret = wacom_i2c_send(wac_i2c, &cmd, 1, false);
@@ -1069,6 +1096,9 @@ static ssize_t epen_boost_level(struct device *dev,
 	struct wacom_i2c *wac_i2c = dev_get_drvdata(dev);
 	int level;
 
+	if (wac_i2c->init_fail)
+		return count;
+
 	sscanf(buf, "%d", &level);
 
 	if (level < 0 || level > 3) {
@@ -1168,6 +1198,9 @@ static void wacom_init_abs_params(struct wacom_i2c *wac_i2c)
 	int min_x, min_y;
 	int max_x, max_y;
 	int pressure;
+
+	if (wac_i2c->init_fail)
+		return;
 
 	min_x = 0;
 	min_y = 0;
@@ -1432,6 +1465,7 @@ static int wacom_i2c_probe(struct i2c_client *client,
 	sysfs_remove_group(&wac_i2c->dev->kobj,
 		&epen_attr_group);
  err_sysfs_create_group:
+    wac_i2c->init_fail = true;
 	device_destroy(sec_class, (dev_t)NULL);
  err_create_device:	
 	input_unregister_device(input);

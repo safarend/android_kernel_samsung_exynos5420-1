@@ -427,6 +427,7 @@ struct wacom_i2c {
 #endif
 	struct work_struct update_work;
 	struct fw_update_info update_info;
+	bool init_fail;
 };
 
 #endif /* _LINUX_WACOM_H */
