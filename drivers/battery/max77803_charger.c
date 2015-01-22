@@ -588,7 +588,8 @@ static int max77803_get_health_state(struct max77803_charger_data *charger)
 {
 	int state;
 	int vbus_state;
-	u8 chg_dtls, reg_data, chg_cnfg_00;
+	u8 chg_dtls_00, chg_dtls_01, chg_dtls, reg_data;
+	u8 chg_cnfg_00, chg_cnfg_01 ,chg_cnfg_02, chg_cnfg_04, chg_cnfg_09, chg_cnfg_12;
 
 	max77803_read_reg(charger->max77803->i2c,
 		MAX77803_CHG_REG_CHG_DTLS_01, &reg_data);
@@ -627,6 +628,8 @@ static int max77803_get_health_state(struct max77803_charger_data *charger)
 		break;
 	}
 
+	pr_info("%s: CHG_DTLS(0x%x), \n", __func__, reg_data);
+
 	/* VBUS OVP state return battery OVP state */
 	vbus_state = max77803_get_vbus_state(charger);
 
@@ -640,6 +643,31 @@ static int max77803_get_health_state(struct max77803_charger_data *charger)
 				MAX77803_CHG_DTLS_SHIFT);
 		max77803_read_reg(charger->max77803->i2c,
 				MAX77803_CHG_REG_CHG_CNFG_00, &chg_cnfg_00);
+
+		/* print the log at the abnormal case */
+		if((charger->is_charging == 1) && (chg_dtls & 0x08)) {
+			max77803_read_reg(charger->max77803->i2c,
+				MAX77803_CHG_REG_CHG_DTLS_00, &chg_dtls_00);
+			max77803_read_reg(charger->max77803->i2c,
+				MAX77803_CHG_REG_CHG_DTLS_01, &chg_dtls_01);
+			max77803_read_reg(charger->max77803->i2c,
+				MAX77803_CHG_REG_CHG_CNFG_01, &chg_cnfg_01);
+			max77803_read_reg(charger->max77803->i2c,
+				MAX77803_CHG_REG_CHG_CNFG_02, &chg_cnfg_02);
+			max77803_read_reg(charger->max77803->i2c,
+				MAX77803_CHG_REG_CHG_CNFG_04, &chg_cnfg_04);
+			max77803_read_reg(charger->max77803->i2c,
+				MAX77803_CHG_REG_CHG_CNFG_09, &chg_cnfg_09);
+			max77803_read_reg(charger->max77803->i2c,
+				MAX77803_CHG_REG_CHG_CNFG_12, &chg_cnfg_12);
+
+			pr_info("%s: CHG_DTLS_00(0x%x), CHG_DTLS_01(0x%x), CHG_CNFG_00(0x%x)\n",
+					__func__, chg_dtls_00, chg_dtls_01, chg_cnfg_00);
+			pr_info("%s:  CHG_CNFG_01(0x%x), CHG_CNFG_02(0x%x), CHG_CNFG_04(0x%x)\n",
+					__func__, chg_cnfg_01, chg_cnfg_02, chg_cnfg_04);
+			pr_info("%s:  CHG_CNFG_09(0x%x), CHG_CNFG_12(0x%x)\n",
+					__func__, chg_cnfg_09, chg_cnfg_12);
+		}
 
 		/* OVP is higher priority */
 		if (vbus_state == 0x02) { /* CHGIN_OVLO */
@@ -840,6 +868,7 @@ static int sec_chg_set_property(struct power_supply *psy,
 		POWER_SUPPLY_TYPE_USB].fast_charging_current;
 	const int wpc_charging_current = charger->pdata->charging_current[
 		POWER_SUPPLY_TYPE_WPC].input_current_limit;
+	u8 chg_cnfg_00;
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_STATUS:
@@ -849,6 +878,26 @@ static int sec_chg_set_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_ONLINE:
 		/* check and unlock */
 		check_charger_unlock_state(charger);
+
+		if (val->intval == POWER_SUPPLY_TYPE_POWER_SHARING) {
+			psy_do_property("ps", get,
+				POWER_SUPPLY_PROP_STATUS, value);
+			chg_cnfg_00 = CHG_CNFG_00_OTG_MASK
+				| CHG_CNFG_00_BOOST_MASK
+				| CHG_CNFG_00_DIS_MUIC_CTRL_MASK;
+
+			if (value.intval) {
+				max77803_update_reg(charger->max77803->i2c, MAX77803_CHG_REG_CHG_CNFG_00,
+					chg_cnfg_00, chg_cnfg_00);
+				pr_info("%s: ps enable\n", __func__);
+			} else {
+				max77803_update_reg(charger->max77803->i2c, MAX77803_CHG_REG_CHG_CNFG_00,
+					0, chg_cnfg_00);
+				pr_info("%s: ps disable\n", __func__);
+			}
+			break;
+		}
+
 		charger->cable_type = val->intval;
 		if (val->intval == POWER_SUPPLY_TYPE_OTG)
 			break;

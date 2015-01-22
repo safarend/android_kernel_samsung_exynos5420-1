@@ -91,6 +91,11 @@ static enum power_supply_property sec_power_props[] = {
 	POWER_SUPPLY_PROP_ONLINE,
 };
 
+static enum power_supply_property sec_ps_props[] = {
+	POWER_SUPPLY_PROP_STATUS,
+	POWER_SUPPLY_PROP_ONLINE,
+};
+
 static char *supply_list[] = {
 	"battery",
 };
@@ -556,9 +561,6 @@ static bool sec_bat_ovp_uvlo_result(
 				POWER_SUPPLY_STATUS_NOT_CHARGING;
 			break;
 		}
-#ifdef CONFIG_FAST_BOOT
-		if (!fake_shut_down)
-#endif
 		power_supply_changed(&battery->psy_bat);
 		return true;
 	}
@@ -1133,6 +1135,7 @@ static void sec_bat_do_test_function(
 				POWER_SUPPLY_PROP_STATUS, value);
 			battery->status = value.intval;
 		}
+		break;
 	default:
 		pr_info("%s: error test: unknown state\n", __func__);
 		break;
@@ -1641,7 +1644,7 @@ static unsigned int sec_bat_get_polling_time(
 			battery->polling_short = false;
 		break;
 	case POWER_SUPPLY_STATUS_DISCHARGING:
-		if (battery->polling_in_sleep)
+		if (battery->polling_in_sleep && (battery->ps_enable != true))
 			battery->polling_time =
 				battery->pdata->polling_time[
 				SEC_BATTERY_POLLING_TIME_SLEEP];
@@ -1780,6 +1783,7 @@ static void sec_bat_monitor_work(
 	struct sec_battery_info *battery =
 		container_of(work, struct sec_battery_info,
 		monitor_work.work);
+
 #ifdef CONFIG_FAST_BOOT
 	bool low_batt_power_off = false;
 #endif
@@ -1847,6 +1851,7 @@ continue_monitor:
 			&& (battery->capacity == 0))
 			low_batt_power_off = true;
 
+			dev_info(battery->dev, "%s: fake_shut_down mode, skip updating status\n", __func__);
 		goto skip_updating_status;
 	}
 #endif
@@ -1855,21 +1860,29 @@ continue_monitor:
 
 	sec_bat_set_polling(battery);
 
-#ifdef CONFIG_FAST_BOOT
-skip_updating_status:
-	if (low_batt_power_off == true) {
-		dev_info(battery->dev, "%s: Power off the device in fake shutdown mode"\
-			"(soc==0, discharging !!!)\n", __func__);
-
-		low_batt_power_off = false;
-		kernel_power_off();
-	}
-#endif
-
 	if (battery->capacity <= 0)
 		wake_lock_timeout(&battery->monitor_wake_lock, HZ * 5);
 	else
 		wake_unlock(&battery->monitor_wake_lock);
+
+#ifdef CONFIG_FAST_BOOT
+skip_updating_status:
+	if (((battery->cable_type == POWER_SUPPLY_TYPE_MAINS)
+		|| (battery->cable_type == POWER_SUPPLY_TYPE_USB)
+		|| (battery->cable_type == POWER_SUPPLY_TYPE_USB_CDP))
+		&& (fake_shut_down) && (!battery->dup_power_off)
+		&& (!battery->suspend_check)) {
+		dev_info(battery->dev, "%s: Resetting the device in fake shutdown mode"\
+			"(TA/USB inserted !!!)\n", __func__);
+		battery->dup_power_off = true;
+		kernel_power_off();
+	} else if (low_batt_power_off == true) {
+		dev_info(battery->dev, "%s: Power off the device in fake shutdown mode"\
+			"(soc==0, discharging !!!)\n", __func__);
+
+		kernel_power_off();
+	}
+#endif
 
 	dev_dbg(battery->dev, "%s: End\n", __func__);
 
@@ -2265,9 +2278,6 @@ ssize_t sec_bat_store_attrs(
 			union power_supply_propval value;
 			battery->voltage_now = 1234;
 			battery->voltage_avg = 1234;
-#ifdef CONFIG_FAST_BOOT
-			if (!fake_shut_down)
-#endif
 			power_supply_changed(&battery->psy_bat);
 
 			value.intval =
@@ -2682,9 +2692,6 @@ static int sec_bat_set_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CAPACITY:
 		battery->capacity = val->intval;
-#ifdef CONFIG_FAST_BOOT
-		if (!fake_shut_down)
-#endif
 		power_supply_changed(&battery->psy_bat);
 		break;
 	default:
@@ -2831,6 +2838,7 @@ static int sec_usb_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_TYPE_USB_DCP:
 	case POWER_SUPPLY_TYPE_USB_CDP:
 	case POWER_SUPPLY_TYPE_USB_ACA:
+	case POWER_SUPPLY_TYPE_MHL_USB:
 		val->intval = 1;
 		break;
 	default:
@@ -2871,6 +2879,107 @@ static int sec_ac_get_property(struct power_supply *psy,
 	default:
 		val->intval = 0;
 		break;
+	}
+
+	return 0;
+}
+
+static int sec_ps_set_property(struct power_supply *psy,
+				enum power_supply_property psp,
+				const union power_supply_propval *val)
+{
+	struct sec_battery_info *battery =
+		container_of(psy, struct sec_battery_info, psy_ps);
+	union power_supply_propval value;
+
+	switch (psp) {
+	case POWER_SUPPLY_PROP_STATUS:
+		if (val->intval == 0) {
+			if (battery->ps_enable == true) {
+				battery->ps_enable = val->intval;
+					dev_info(battery->dev,
+						"%s: power sharing cable set (%d)\n", __func__, battery->ps_enable);
+				value.intval = POWER_SUPPLY_TYPE_POWER_SHARING;
+				psy_do_property(battery->pdata->charger_name, set,
+					POWER_SUPPLY_PROP_ONLINE, value);	}
+		} else if ((val->intval == 1) && (battery->ps_status == true)) {
+			battery->ps_enable = val->intval;
+				dev_info(battery->dev,
+					"%s: power sharing cable set (%d)\n", __func__, battery->ps_enable);
+			value.intval = POWER_SUPPLY_TYPE_POWER_SHARING;
+			psy_do_property(battery->pdata->charger_name, set,
+				POWER_SUPPLY_PROP_ONLINE, value);
+		} else {
+			dev_err(battery->dev,
+				"%s: invalid setting (%d) ps_status (%d)\n",
+				__func__, val->intval, battery->ps_status);
+		}
+		break;
+	case POWER_SUPPLY_PROP_ONLINE:
+		if (val->intval == POWER_SUPPLY_TYPE_POWER_SHARING) {
+			battery->ps_status = true;
+			battery->ps_enable = true;
+			battery->ps_changed = true;
+			dev_info(battery->dev,
+				"%s: power sharing cable plugin (%d)\n", __func__, battery->ps_status);
+			wake_lock(&battery->monitor_wake_lock);
+			queue_delayed_work(battery->monitor_wqueue, &battery->monitor_work, 0);
+		} else {
+			battery->ps_status = false;
+			dev_info(battery->dev,
+				"%s: power sharing cable plugout (%d)\n", __func__, battery->ps_status);
+			wake_lock(&battery->monitor_wake_lock);
+			queue_delayed_work(battery->monitor_wqueue, &battery->monitor_work, 0);
+		}
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
+static int sec_ps_get_property(struct power_supply *psy,
+			       enum power_supply_property psp,
+			       union power_supply_propval *val)
+{
+	struct sec_battery_info *battery =
+		container_of(psy, struct sec_battery_info, psy_ps);
+	union power_supply_propval value;
+
+	switch (psp) {
+	case POWER_SUPPLY_PROP_STATUS:
+		if (battery->ps_enable)
+			val->intval = 1;
+		else
+			val->intval = 0;
+		break;
+	case POWER_SUPPLY_PROP_ONLINE:
+		if (battery->ps_status) {
+			if ((battery->ps_enable == true) && (battery->ps_changed == true)) {
+				battery->ps_changed = false;
+
+				value.intval = POWER_SUPPLY_TYPE_POWER_SHARING;
+				psy_do_property(battery->pdata->charger_name, set,
+						POWER_SUPPLY_PROP_ONLINE, value);
+			}
+			val->intval = 1;
+		} else {
+			if (battery->ps_enable == true) {
+				battery->ps_enable = false;
+				dev_info(battery->dev,
+					"%s: power sharing cable disconnected! ps disable (%d)\n",
+					__func__, battery->ps_enable);
+
+				value.intval = POWER_SUPPLY_TYPE_POWER_SHARING;
+				psy_do_property(battery->pdata->charger_name, set,
+					POWER_SUPPLY_PROP_ONLINE, value);
+			}
+			val->intval = 0;
+		}
+		break;
+	default:
+		return -EINVAL;
 	}
 
 	return 0;
@@ -2985,6 +3094,13 @@ static int __devinit sec_battery_probe(struct platform_device *pdev)
 	battery->charging_fullcharged_time = 0;
 	battery->siop_level = 100;
 	battery->wc_enable = 1;
+	battery->ps_status = 0;
+	battery->ps_changed = 0;
+
+#ifdef CONFIG_FAST_BOOT
+	battery->dup_power_off = false;
+	battery->suspend_check = false;
+#endif
 
 	if (battery->pdata->check_batt_id)
 		battery->pdata->check_batt_id();
@@ -3015,26 +3131,35 @@ static int __devinit sec_battery_probe(struct platform_device *pdev)
 	battery->factory_mode = false;
 	battery->slate_mode = false;
 
-	battery->psy_bat.name = "battery",
-	battery->psy_bat.type = POWER_SUPPLY_TYPE_BATTERY,
-	battery->psy_bat.properties = sec_battery_props,
-	battery->psy_bat.num_properties = ARRAY_SIZE(sec_battery_props),
-	battery->psy_bat.get_property = sec_bat_get_property,
-	battery->psy_bat.set_property = sec_bat_set_property,
-	battery->psy_usb.name = "usb",
-	battery->psy_usb.type = POWER_SUPPLY_TYPE_USB,
-	battery->psy_usb.supplied_to = supply_list,
-	battery->psy_usb.num_supplicants = ARRAY_SIZE(supply_list),
-	battery->psy_usb.properties = sec_power_props,
-	battery->psy_usb.num_properties = ARRAY_SIZE(sec_power_props),
-	battery->psy_usb.get_property = sec_usb_get_property,
-	battery->psy_ac.name = "ac",
-	battery->psy_ac.type = POWER_SUPPLY_TYPE_MAINS,
-	battery->psy_ac.supplied_to = supply_list,
-	battery->psy_ac.num_supplicants = ARRAY_SIZE(supply_list),
-	battery->psy_ac.properties = sec_power_props,
-	battery->psy_ac.num_properties = ARRAY_SIZE(sec_power_props),
+	battery->psy_bat.name = "battery";
+	battery->psy_bat.type = POWER_SUPPLY_TYPE_BATTERY;
+	battery->psy_bat.properties = sec_battery_props;
+	battery->psy_bat.num_properties = ARRAY_SIZE(sec_battery_props);
+	battery->psy_bat.get_property = sec_bat_get_property;
+	battery->psy_bat.set_property = sec_bat_set_property;
+	battery->psy_usb.name = "usb";
+	battery->psy_usb.type = POWER_SUPPLY_TYPE_USB;
+	battery->psy_usb.supplied_to = supply_list;
+	battery->psy_usb.num_supplicants = ARRAY_SIZE(supply_list);
+	battery->psy_usb.properties = sec_power_props;
+	battery->psy_usb.num_properties = ARRAY_SIZE(sec_power_props);
+	battery->psy_usb.get_property = sec_usb_get_property;
+	battery->psy_ac.name = "ac";
+	battery->psy_ac.type = POWER_SUPPLY_TYPE_MAINS;
+	battery->psy_ac.supplied_to = supply_list;
+	battery->psy_ac.num_supplicants = ARRAY_SIZE(supply_list);
+	battery->psy_ac.properties = sec_power_props;
+	battery->psy_ac.num_properties = ARRAY_SIZE(sec_power_props);
 	battery->psy_ac.get_property = sec_ac_get_property;
+
+	battery->psy_ps.name = "ps";
+	battery->psy_ps.type = POWER_SUPPLY_TYPE_POWER_SHARING;
+	battery->psy_ps.supplied_to = supply_list;
+	battery->psy_ps.num_supplicants = ARRAY_SIZE(supply_list);
+	battery->psy_ps.properties = sec_ps_props;
+	battery->psy_ps.num_properties = ARRAY_SIZE(sec_ps_props);
+	battery->psy_ps.get_property = sec_ps_get_property;
+	battery->psy_ps.set_property = sec_ps_set_property;
 
 	/* create work queue */
 	battery->monitor_wqueue =
@@ -3077,11 +3202,18 @@ static int __devinit sec_battery_probe(struct platform_device *pdev)
 #endif
 
 	/* init power supplier framework */
+	ret = power_supply_register(&pdev->dev, &battery->psy_ps);
+	if (ret) {
+		dev_err(battery->dev,
+			"%s: Failed to Register psy_ps\n", __func__);
+		goto err_workqueue;
+	}
+
 	ret = power_supply_register(&pdev->dev, &battery->psy_usb);
 	if (ret) {
 		dev_err(battery->dev,
 			"%s: Failed to Register psy_usb\n", __func__);
-		goto err_workqueue;
+		goto err_supply_unreg_ps;
 	}
 
 	ret = power_supply_register(&pdev->dev, &battery->psy_ac);
@@ -3156,6 +3288,8 @@ err_supply_unreg_ac:
 	power_supply_unregister(&battery->psy_ac);
 err_supply_unreg_usb:
 	power_supply_unregister(&battery->psy_usb);
+err_supply_unreg_ps:
+	power_supply_unregister(&battery->psy_ps);
 err_workqueue:
 	destroy_workqueue(battery->monitor_wqueue);
 err_wake_lock:
@@ -3201,6 +3335,7 @@ static int __devexit sec_battery_remove(struct platform_device *pdev)
 	for (i = 0; i < SEC_BAT_ADC_CHANNEL_FULL_CHECK; i++)
 		adc_exit(battery->pdata, i);
 
+	power_supply_unregister(&battery->psy_ps);
 	power_supply_unregister(&battery->psy_ac);
 	power_supply_unregister(&battery->psy_usb);
 	power_supply_unregister(&battery->psy_bat);
@@ -3249,6 +3384,14 @@ static int sec_battery_prepare(struct device *dev)
 
 static int sec_battery_suspend(struct device *dev)
 {
+#ifdef CONFIG_FAST_BOOT
+	struct sec_battery_info *battery = dev_get_drvdata(dev);
+	dev_info(battery->dev, "%s\n", __func__);
+
+	if (fake_shut_down)
+		battery->suspend_check = true;
+#endif
+
 	return 0;
 }
 
@@ -3267,6 +3410,20 @@ static void sec_battery_complete(struct device *dev)
 	wake_lock(&battery->monitor_wake_lock);
 	queue_delayed_work(battery->monitor_wqueue,
 		&battery->monitor_work, 500);
+
+#ifdef CONFIG_FAST_BOOT
+		if (((battery->cable_type == POWER_SUPPLY_TYPE_MAINS)
+			|| (battery->cable_type == POWER_SUPPLY_TYPE_USB)
+			|| (battery->cable_type == POWER_SUPPLY_TYPE_USB_CDP))
+			&& (fake_shut_down) && (!battery->dup_power_off)) {
+			dev_info(battery->dev,"%s: Resetting the device in fake shutdown mode"\
+				"(TA/USB inserted !!!)\n", __func__);
+			battery->dup_power_off = true;
+			kernel_power_off();
+		}
+
+		battery->suspend_check = false;
+#endif
 
 	dev_dbg(battery->dev, "%s: End\n", __func__);
 

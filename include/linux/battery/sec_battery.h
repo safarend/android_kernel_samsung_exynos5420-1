@@ -53,6 +53,7 @@ struct sec_battery_info {
 	struct power_supply psy_bat;
 	struct power_supply psy_usb;
 	struct power_supply psy_ac;
+	struct power_supply psy_ps;
 	unsigned int irq;
 
 	int status;
@@ -135,6 +136,11 @@ struct sec_battery_info {
 	/* wireless charging enable*/
 	int wc_enable;
 
+	/* wearable charging */
+	int ps_enable;
+	int ps_status;
+	int ps_changed;
+
 	/* test mode */
 	int test_activated;
 	bool factory_mode;
@@ -142,6 +148,8 @@ struct sec_battery_info {
 
 #ifdef CONFIG_FAST_BOOT
 	struct notifier_block fsd_notifier_block;
+	bool dup_power_off;
+	bool suspend_check;
 #endif
 
 	int siop_level;
