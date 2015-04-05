@@ -16,3 +16,5 @@ obj-$(CONFIG_SENSORS_SSP_LPS25H)	+= pressure_lps25h.o
 obj-$(CONFIG_SENSORS_SSP_SHTC1)		+= temphumidity_shtc1.o
 
 obj-$(CONFIG_SENSORS_SSP_STM32F401)	+= mcu_stm32f401.o
+
+obj-$(CONFIG_SENSORS_SSP_STM32F401)	+= mcu_stm32f401.o

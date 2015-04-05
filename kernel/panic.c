@@ -24,6 +24,9 @@
 #include <linux/nmi.h>
 #include <linux/dmi.h>
 #include "sched/sched.h"
+#ifdef CONFIG_SEC_DEBUG_SUBSYS
+#include <mach/sec_debug.h>
+#endif
 
 #define PANIC_TIMER_STEP 100
 #define PANIC_BLINK_SPD 18
@@ -113,14 +116,6 @@ void panic(const char *fmt, ...)
 	int state = 0;
 
 	/*
-	 * Disable local interrupts. This will prevent panic_smp_self_stop
-	 * from deadlocking the first cpu that invokes the panic, since
-	 * there is nothing to prevent an interrupt handler (that runs
-	 * after the panic_lock is acquired) from invoking panic again.
-	 */
-	local_irq_disable();
-
-	/*
 	 * It's possible to come here directly from a panic-assertion and
 	 * not have preempt disabled. Some functions called from here want
 	 * preempt to be disabled. No point enabling it later though...
@@ -150,7 +145,10 @@ void panic(const char *fmt, ...)
 	if (!test_taint(TAINT_DIE) && oops_in_progress <= 1)
 		dump_stack();
 #endif
-
+#ifdef CONFIG_SEC_DEBUG_SUBSYS
+	sec_debug_save_panic_info(buf,
+		(unsigned int)__builtin_return_address(0));
+#endif
 	/* sysrq_sched_debug_show(); */
 
 	/*

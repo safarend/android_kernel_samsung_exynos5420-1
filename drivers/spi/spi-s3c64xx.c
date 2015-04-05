@@ -23,12 +23,10 @@
 #include <linux/interrupt.h>
 #include <linux/delay.h>
 #include <linux/clk.h>
-#include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/spi/spi.h>
 
-#include <mach/dma.h>
 #include <plat/s3c64xx-spi.h>
 #include <plat/cpu.h>
 
@@ -131,52 +129,6 @@
 
 #define RXBUSY    (1<<2)
 #define TXBUSY    (1<<3)
-
-struct s3c64xx_spi_dma_data {
-	unsigned		ch;
-	enum dma_transfer_direction direction;
-	enum dma_ch	dmach;
-};
-
-/**
- * struct s3c64xx_spi_driver_data - Runtime info holder for SPI driver.
- * @clk: Pointer to the spi clock.
- * @src_clk: Pointer to the clock used to generate SPI signals.
- * @master: Pointer to the SPI Protocol master.
- * @cntrlr_info: Platform specific data for the controller this driver manages.
- * @tgl_spi: Pointer to the last CS left untoggled by the cs_change hint.
- * @queue: To log SPI xfer requests.
- * @lock: Controller specific lock.
- * @state: Set of FLAGS to indicate status.
- * @rx_dmach: Controller's DMA channel for Rx.
- * @tx_dmach: Controller's DMA channel for Tx.
- * @sfr_start: BUS address of SPI controller regs.
- * @regs: Pointer to ioremap'ed controller registers.
- * @irq: interrupt
- * @xfer_completion: To indicate completion of xfer task.
- * @cur_mode: Stores the active configuration of the controller.
- * @cur_bpw: Stores the active bits per word settings.
- * @cur_speed: Stores the active xfer clock speed.
- */
-struct s3c64xx_spi_driver_data {
-	void __iomem                    *regs;
-	struct clk                      *clk;
-	struct clk                      *src_clk;
-	struct platform_device          *pdev;
-	struct spi_master               *master;
-	struct s3c64xx_spi_info  *cntrlr_info;
-	struct spi_device               *tgl_spi;
-	struct list_head                queue;
-	spinlock_t                      lock;
-	unsigned long                   sfr_start;
-	struct completion               xfer_completion;
-	unsigned                        state;
-	unsigned                        cur_mode, cur_bpw;
-	unsigned                        cur_speed;
-	struct s3c64xx_spi_dma_data	rx_dma;
-	struct s3c64xx_spi_dma_data	tx_dma;
-	struct samsung_dma_ops		*ops;
-};
 
 static struct s3c2410_dma_client s3c64xx_spi_dma_client = {
 	.name = "samsung-spi-dma",
@@ -981,30 +933,25 @@ static irqreturn_t s3c64xx_spi_irq(int irq, void *data)
 {
 	struct s3c64xx_spi_driver_data *sdd = data;
 	struct spi_master *spi = sdd->master;
-	unsigned int val, clr = 0;
+	unsigned int val;
 
-	val = readl(sdd->regs + S3C64XX_SPI_STATUS);
+	val = readl(sdd->regs + S3C64XX_SPI_PENDING_CLR);
 
-	if (val & S3C64XX_SPI_ST_RX_OVERRUN_ERR) {
-		clr = S3C64XX_SPI_PND_RX_OVERRUN_CLR;
+	val &= S3C64XX_SPI_PND_RX_OVERRUN_CLR |
+		S3C64XX_SPI_PND_RX_UNDERRUN_CLR |
+		S3C64XX_SPI_PND_TX_OVERRUN_CLR |
+		S3C64XX_SPI_PND_TX_UNDERRUN_CLR;
+
+	writel(val, sdd->regs + S3C64XX_SPI_PENDING_CLR);
+
+	if (val & S3C64XX_SPI_PND_RX_OVERRUN_CLR)
 		dev_err(&spi->dev, "RX overrun\n");
-	}
-	if (val & S3C64XX_SPI_ST_RX_UNDERRUN_ERR) {
-		clr |= S3C64XX_SPI_PND_RX_UNDERRUN_CLR;
+	if (val & S3C64XX_SPI_PND_RX_UNDERRUN_CLR)
 		dev_err(&spi->dev, "RX underrun\n");
-	}
-	if (val & S3C64XX_SPI_ST_TX_OVERRUN_ERR) {
-		clr |= S3C64XX_SPI_PND_TX_OVERRUN_CLR;
+	if (val & S3C64XX_SPI_PND_TX_OVERRUN_CLR)
 		dev_err(&spi->dev, "TX overrun\n");
-	}
-	if (val & S3C64XX_SPI_ST_TX_UNDERRUN_ERR) {
-		clr |= S3C64XX_SPI_PND_TX_UNDERRUN_CLR;
+	if (val & S3C64XX_SPI_PND_TX_UNDERRUN_CLR)
 		dev_err(&spi->dev, "TX underrun\n");
-	}
-
-	/* Clear the pending irq by setting and then clearing it */
-	writel(clr, sdd->regs + S3C64XX_SPI_PENDING_CLR);
-	writel(0, sdd->regs + S3C64XX_SPI_PENDING_CLR);
 
 	return IRQ_HANDLED;
 }
@@ -1028,13 +975,9 @@ static void s3c64xx_spi_hwinit(struct s3c64xx_spi_driver_data *sdd, int channel)
 	writel(0, regs + S3C64XX_SPI_MODE_CFG);
 	writel(0, regs + S3C64XX_SPI_PACKET_CNT);
 
-	/* Clear any irq pending bits, should set and clear the bits */
-	val = S3C64XX_SPI_PND_RX_OVERRUN_CLR |
-		S3C64XX_SPI_PND_RX_UNDERRUN_CLR |
-		S3C64XX_SPI_PND_TX_OVERRUN_CLR |
-		S3C64XX_SPI_PND_TX_UNDERRUN_CLR;
-	writel(val, regs + S3C64XX_SPI_PENDING_CLR);
-	writel(0, regs + S3C64XX_SPI_PENDING_CLR);
+	/* Clear any irq pending bits */
+	writel(readl(regs + S3C64XX_SPI_PENDING_CLR),
+				regs + S3C64XX_SPI_PENDING_CLR);
 
 	writel(0, regs + S3C64XX_SPI_SWAP_CFG);
 
@@ -1266,19 +1209,22 @@ static int s3c64xx_spi_remove(struct platform_device *pdev)
 #ifdef CONFIG_PM
 static int s3c64xx_spi_suspend(struct device *dev)
 {
+#ifndef CONFIG_PM_RUNTIME
 	struct platform_device *pdev = to_platform_device(dev);
+#endif
 	struct spi_master *master = spi_master_get(dev_get_drvdata(dev));
 	struct s3c64xx_spi_driver_data *sdd = spi_master_get_devdata(master);
 
 	spi_master_suspend(master);
 
+#ifndef CONFIG_PM_RUNTIME
+
 	if (pdev->id < 3) {
-		if (!pm_runtime_enabled(dev)) {
-			/* Disable the clock */
-			clk_disable(sdd->src_clk);
-			clk_disable(sdd->clk);
-		}
+		/* Disable the clock */
+		clk_disable(sdd->src_clk);
+		clk_disable(sdd->clk);
 	}
+#endif
 
 	sdd->cur_speed = 0; /* Output Clock is stopped */
 
@@ -1301,15 +1247,25 @@ static int s3c64xx_spi_resume(struct device *dev)
 
 		s3c64xx_spi_hwinit(sdd, pdev->id);
 
-		if (pm_runtime_enabled(dev)) {
-			/* Disable the clock */
-			clk_disable(sdd->src_clk);
-			clk_disable(sdd->clk);
-		}
+#ifdef CONFIG_PM_RUNTIME
+		/* Disable the clock */
+		clk_disable(sdd->src_clk);
+		clk_disable(sdd->clk);
+#endif
 	}
 
 	spi_master_resume(master);
 
+	return 0;
+}
+#else
+static int s3c64xx_spi_suspend(struct device *dev)
+{
+	return 0;
+}
+
+static int s3c64xx_spi_resume(struct device *dev)
+{
 	return 0;
 }
 #endif /* CONFIG_PM */

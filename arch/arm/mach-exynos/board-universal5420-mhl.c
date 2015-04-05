@@ -44,6 +44,8 @@ static bool mhl_power_on;
 #define MHL_DEFAULT_SWING 0x27 /*default value is 0x2D*/
 #elif defined(CONFIG_N2A_WIFI)
 #define MHL_DEFAULT_SWING 0x2E
+#elif defined(CONFIG_MHL_SWING_LEVEL_VALUE)
+#define MHL_DEFAULT_SWING CONFIG_MHL_SWING_LEVEL_VALUE
 #else
 #define MHL_DEFAULT_SWING 0x25
 #endif

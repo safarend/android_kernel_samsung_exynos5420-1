@@ -37,8 +37,6 @@
 #include <asm/bug.h>
 #endif
 
-static bool tsp_keys_enabled = true;
-
 static int mxt_read_mem(struct mxt_data *data, u16 reg, u8 len, void *buf)
 {
 	int ret = 0, i = 0;
@@ -602,9 +600,6 @@ static void mxt_report_input_data(struct mxt_data *data)
 			input_report_abs(data->input_dev, ABS_MT_PRESSURE,
 					 data->fingers[i].z);
 #if TSP_USE_SHAPETOUCH
-			input_report_abs(data->input_dev, ABS_MT_COMPONENT,
-					data->fingers[i].component);
-
 			sum_size = data->sumsize;
 /* Change for palm swape motion (20131211 USE_FOR_SUFACE) */
 #if USE_FOR_SUFACE
@@ -619,8 +614,6 @@ static void mxt_report_input_data(struct mxt_data *data)
 			}
 #endif
 #endif
-			input_report_abs(data->input_dev, ABS_MT_SUMSIZE,
-					sum_size);
 #endif
 #if TSP_USE_PALM_FLAG
 			input_report_abs(data->input_dev, ABS_MT_PALM,
@@ -844,7 +837,7 @@ static void mxt_release_all_keys(struct mxt_data *data)
 
 	if (data->tsp_keystatus != TOUCH_KEY_NULL) {
 		if (data->report_dummy_key) {
-			for (i = 0 ; tsp_keys_enabled && i < data->pdata->num_touchkey ; i++) {
+			for (i = 0 ; i < data->pdata->num_touchkey ; i++) {
 				if (data->tsp_keystatus & data->pdata->touchkey[i].value) {
 				/* report all touch-key event */
 					input_report_key(data->input_dev,
@@ -854,7 +847,7 @@ static void mxt_release_all_keys(struct mxt_data *data)
 				}
 			}
 
-		} else if (tsp_keys_enabled) {
+		} else {
 			/* menu key check*/
 			if (data->tsp_keystatus & TOUCH_KEY_MENU) {
 				if(data->ignore_menu_key)
@@ -915,7 +908,7 @@ static void mxt_treat_T15_object(struct mxt_data *data,
 	/* single key configuration*/
 	if (input_status) { /* press */
 		if (data->report_dummy_key) {
-			for (i = 0 ; i < tsp_keys_enabled && data->pdata->num_touchkey ; i++) {
+			for (i = 0 ; i < data->pdata->num_touchkey ; i++) {
 				if (change_state & data->pdata->touchkey[i].value) {
 					key_state = input_message & data->pdata->touchkey[i].value;
 					input_report_key(data->input_dev, data->pdata->touchkey[i].keycode,
@@ -937,7 +930,7 @@ static void mxt_treat_T15_object(struct mxt_data *data,
 				else if (data->ignore_menu_key_by_back)
 					tsp_debug_info(true, &data->client->dev,
 						"[TSP_KEY] Ignore menu %s by back key\n", key_state != 0 ? "P" : "R");
-				else if (tsp_keys_enabled) {
+				else {
 					code = KEY_RECENT;
 					if (key_state != 0)
 						data->ignore_back_key_by_menu = true;
@@ -955,7 +948,7 @@ static void mxt_treat_T15_object(struct mxt_data *data,
 				else if (data->ignore_back_key_by_menu)
 					tsp_debug_info(true, &data->client->dev,
 						"[TSP_KEY] Ignore menu %s by menu key\n", key_state != 0 ? "P" : "R");
-				else if (tsp_keys_enabled) {
+				else {
 					code = KEY_BACK;
 					if (key_state != 0)
 						data->ignore_menu_key_by_back = true;
@@ -2408,7 +2401,7 @@ static int __devinit mxt_probe(struct i2c_client *client,
 	set_bit(BTN_TOUCH, input_dev->keybit);
 
 #if ENABLE_TOUCH_KEY
-	for (i = 0 ; tsp_keys_enabled && i < data->pdata->num_touchkey ; i++)
+	for (i = 0 ; i < data->pdata->num_touchkey ; i++)
 		set_bit(data->pdata->touchkey[i].keycode, input_dev->keybit);
 
   	set_bit(EV_LED, input_dev->evbit);
@@ -2427,12 +2420,6 @@ static int __devinit mxt_probe(struct i2c_client *client,
 				0, MXT_AREA_MAX, 0, 0);
 	input_set_abs_params(input_dev, ABS_MT_PRESSURE,
 				0, MXT_AMPLITUDE_MAX, 0, 0);
-#if TSP_USE_SHAPETOUCH
-	input_set_abs_params(input_dev, ABS_MT_COMPONENT,
-				0, MXT_COMPONENT_MAX, 0, 0);
-	input_set_abs_params(input_dev, ABS_MT_SUMSIZE,
-				0, MXT_SUMSIZE_MAX, 0, 0);
-#endif
 #if TSP_USE_PALM_FLAG
 	input_set_abs_params(input_dev, ABS_MT_PALM,
 				0, MXT_PALM_MAX, 0, 0);

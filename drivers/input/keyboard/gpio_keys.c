@@ -453,7 +453,6 @@ static ssize_t hall_detect_show(struct device *dev,
 				struct device_attribute *attr, char *buf)
 {
 	struct gpio_keys_drvdata *ddata = dev_get_drvdata(dev);
-	pr_info("COVER ACT 0 %s\n", __func__);
 
 	if (ddata->flip_cover)
 		sprintf(buf, "OPEN");
@@ -892,7 +891,7 @@ static void flip_cover_work(struct work_struct *work)
 	if(first == second && ddata->flip_cover != first) {
 		ddata->flip_cover = first;
 		input_report_switch(ddata->input,
-			SW_LID, !ddata->flip_cover);
+			SW_FLIP, ddata->flip_cover);
 		input_sync(ddata->input);
 	}
 }
@@ -912,7 +911,7 @@ static void flip_cover_work(struct work_struct *work)
 	if(ddata->flip_cover != first) {
 		ddata->flip_cover = first;
 		input_report_switch(ddata->input,
-			SW_LID, !ddata->flip_cover);
+			SW_FLIP, ddata->flip_cover);
 		input_sync(ddata->input);
 	}
 }
@@ -1111,7 +1110,7 @@ static void init_hall_ic_irq(struct input_dev *input)
 		request_threaded_irq(
 		irq, NULL,
 		flip_cover_detect,
-		IRQF_DISABLED | IRQF_TRIGGER_RISING |
+		IRQF_NO_SUSPEND | IRQF_DISABLED | IRQF_TRIGGER_RISING |
 		IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 		"flip_cover", ddata);
 	if (ret < 0) {
@@ -1172,7 +1171,7 @@ static int __devinit gpio_keys_probe(struct platform_device *pdev)
 	input->dev.parent = &pdev->dev;
 #ifdef CONFIG_SENSORS_HALL
 	input->evbit[0] |= BIT_MASK(EV_SW);
-	input_set_capability(input, EV_SW, SW_LID);
+	input_set_capability(input, EV_SW, SW_FLIP);
 #endif
 	input->open = gpio_keys_open;
 	input->close = gpio_keys_close;
@@ -1355,6 +1354,10 @@ static int gpio_keys_resume(struct device *dev)
 		if (gpio_is_valid(bdata->button->gpio))
 			gpio_keys_report_event(bdata);
 	}
+
+	ddata->flip_cover = gpio_get_value(ddata->gpio_flip_cover);
+	input_report_switch(ddata->input, SW_FLIP, ddata->flip_cover);
+
 	input_sync(ddata->input);
 
 	return 0;
