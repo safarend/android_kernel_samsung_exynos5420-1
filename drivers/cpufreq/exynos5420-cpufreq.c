@@ -488,7 +488,7 @@ static const unsigned int asv_voltage_5420_CA15[CPUFREQ_LEVEL_END_CA15] = {
  */
 static const unsigned int exynos5420_max_op_freq_b_evt0[NR_CPUS + 1] = {
 	UINT_MAX,
-#ifdef CONFIG_EXYNOS5_MAX_CPU_HOTPLUG
+//#ifdef CONFIG_EXYNOS5_MAX_CPU_HOTPLUG
 	2100000,
 	2100000,
 	2100000,
